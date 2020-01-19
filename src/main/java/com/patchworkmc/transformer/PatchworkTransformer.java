@@ -21,6 +21,8 @@ import com.patchworkmc.access.AccessTransformation;
 import com.patchworkmc.access.ClassAccessTransformations;
 import com.patchworkmc.access.ModAccessTransformer;
 import com.patchworkmc.annotation.AnnotationProcessor;
+import com.patchworkmc.capability.CapabilityInject;
+import com.patchworkmc.capability.CapabilityInjectScanner;
 import com.patchworkmc.event.EventBusSubscriber;
 import com.patchworkmc.event.EventHandlerScanner;
 import com.patchworkmc.event.SubscribeEvent;
@@ -102,7 +104,17 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 			accessTransformations.addFieldTransformation(holder.getField(), AccessTransformation.DEFINALIZE_MAKE_PUBLIC);
 		});
 
-		EventHandlerScanner eventHandlerScanner = new EventHandlerScanner(objectHolderScanner, subscriber ->
+		CapabilityInjectScanner capabilityInjectScanner = new CapabilityInjectScanner(objectHolderScanner, inject -> {
+			LOGGER.info("Capability injection: " + inject);
+
+			if (inject instanceof CapabilityInject.Field) {
+				CapabilityInject.Field fieldInject = (CapabilityInject.Field) inject;
+
+				accessTransformations.addFieldTransformation(fieldInject.getField(), AccessTransformation.DEFINALIZE_MAKE_PUBLIC);
+			}
+		});
+
+		EventHandlerScanner eventHandlerScanner = new EventHandlerScanner(capabilityInjectScanner, subscriber ->
 				eventBusSubscribers.add(new AbstractMap.SimpleImmutableEntry<>(name, subscriber)), subscribeEvent -> {
 			subscribeEvents.add(subscribeEvent);
 
