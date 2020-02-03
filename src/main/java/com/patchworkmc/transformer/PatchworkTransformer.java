@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -89,6 +90,7 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 
 		List<ObjectHolder> objectHolders = new ArrayList<>();
 		List<SubscribeEvent> subscribeEvents = new ArrayList<>();
+		AtomicReference<EventBusSubscriber> eventBusSubscriber = new AtomicReference<>();
 
 		ClassAccessTransformations accessTransformations = new ClassAccessTransformations();
 
@@ -114,8 +116,8 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 			}
 		});
 
-		EventHandlerScanner eventHandlerScanner = new EventHandlerScanner(capabilityInjectScanner, subscriber ->
-				eventBusSubscribers.add(new AbstractMap.SimpleImmutableEntry<>(name, subscriber)), subscribeEvent -> {
+		EventHandlerScanner eventHandlerScanner = new EventHandlerScanner(capabilityInjectScanner, eventBusSubscriber::set,
+				subscribeEvent -> {
 			subscribeEvents.add(subscribeEvent);
 
 			accessTransformations.setClassTransformation(AccessTransformation.MAKE_PUBLIC);
@@ -152,7 +154,7 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 			String shimName = SubscribeEventGenerator.generate(name, entry, shimWriter);
 
 			if (subscribeEventStaticShims.containsKey(shimName) || subscribeEventInstanceShims.containsKey(shimName)) {
-				throw new UnsupportedOperationException("FIXME: Two @SubscribeEvent shims have the same name! This should be handled by Patchwork, it's a bug!");
+				throw new UnsupportedOperationException("FIXME: Two @SubscribeEvent shims have the same name! This should be handled by Patchwork, it's a bug! Shim name: " + shimName);
 			}
 
 			if ((entry.getAccess() & Opcodes.ACC_STATIC) == Opcodes.ACC_STATIC) {
@@ -180,6 +182,16 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 			outputConsumer.accept(shimName, shimWriter.toByteArray());
 
 			instanceEventRegistrars.add(new AbstractMap.SimpleImmutableEntry<>(shimName, name));
+		}
+
+		if (eventBusSubscriber.get() != null) {
+			if (subscribeEventStaticShims.isEmpty()) {
+				Patchwork.LOGGER.warn("Ignoring the @EventBusSubscriber annotation on %s because it has no static methods with @SubscribeEvent", name);
+			} else {
+				EventBusSubscriber subscriber = eventBusSubscriber.get();
+
+				eventBusSubscribers.add(new AbstractMap.SimpleImmutableEntry<>(name, subscriber));
+			}
 		}
 
 		outputConsumer.accept(name, writer.toByteArray());

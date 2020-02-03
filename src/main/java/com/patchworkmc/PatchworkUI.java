@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.Permission;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -73,7 +74,6 @@ import com.patchworkmc.mapping.TinyWriter;
 import com.patchworkmc.mapping.Tsrg;
 import com.patchworkmc.mapping.TsrgClass;
 import com.patchworkmc.mapping.TsrgMappings;
-import com.patchworkmc.mapping.remapper.NaiveRemapper;
 
 public class PatchworkUI {
 	private static final String[] SUPPORTED_VERSIONS = {"1.14.4"};
@@ -558,37 +558,17 @@ public class PatchworkUI {
 			}
 		}
 
-		NaiveRemapper naiveRemapper = new NaiveRemapper(bridged);
 		LOGGER.info("Preparation Complete!\n");
 
-		File inputFolder = new File(modsFolder.getText());
+		Path inputFolder = new File(modsFolder.getText()).toPath();
 		Path outputFolder = new File(PatchworkUI.outputFolder.getText()).toPath();
-		int[] patched = {0};
+		Path tempFolder = Files.createTempDirectory(rootPath, "temp");
+		List<IMappingProvider> devMappings = generateDevJar.isSelected() ? Collections.singletonList(yarnMappings[0]) : Collections.emptyList();
 
-		Files.walk(inputFolder.toPath()).forEach(path -> {
-			if (!path.toString().endsWith(".jar")) {
-				return;
-			}
+		Patchwork patchwork = new Patchwork(inputFolder, outputFolder, rootPath.resolve("/data"), tempFolder, bridged, devMappings);
 
-			String modName = path.getFileName().toString().replaceAll(".jar", "");
-			LOGGER.info("=== Patching " + path.toString() + " ===");
-
-			try {
-				Patchwork.transformMod(rootPath, path, outputFolder, modName, bridged, naiveRemapper);
-
-				if (yarnBuild != null) {
-					LOGGER.info("Remapping " + modName + " (intermediary -> yarn)");
-					Patchwork.remap(yarnMappings[0], outputFolder.resolve(modName + ".jar"), outputFolder.resolve(modName + "-dev.jar"), rootPath.resolve("data/" + version + "-client+intermediary.jar"));
-				}
-
-				patched[0]++;
-			} catch (Throwable t) {
-				LOGGER.error("Transformation failed, skipping current mod!");
-
-				LOGGER.thrown(LogLevel.ERROR, t);
-			}
-		});
-		LOGGER.info("Successfully patched " + patched[0] + " mod(s)!");
+		int patched = patchwork.patchAndFinish();
+		LOGGER.info("Successfully patched " + patched + " mod(s)!");
 	}
 
 	private static void downloadYarn(YarnBuild yarnBuild, File parent) throws IOException {

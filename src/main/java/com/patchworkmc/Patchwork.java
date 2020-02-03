@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import com.electronwill.nightconfig.core.file.FileConfig;
@@ -51,15 +52,16 @@ public class Patchwork {
 	public static final Logger LOGGER;
 	private static String version = "1.14.4";
 
-	private static byte[] patchworkGreyscaleIcon;
+	private byte[] patchworkGreyscaleIcon;
+
+	private Path inputDir, outputDir, dataDir, tempDir;
+	private IMappingProvider primaryMappings;
+	private List<IMappingProvider> devMappings;
+	private NaiveRemapper naiveRemapper;
+	private ManifestRemapper manifestRemapper;
+	private boolean closed = false;
 
 	static {
-		try {
-			patchworkGreyscaleIcon = Files.readAllBytes(new File(Patchwork.class.getResource("/patchwork-icon-greyscale.png").getPath()).toPath());
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-
 		// TODO: With the new logger from application-core, this is
 		// 		 a little problem, since it does not follow the concept of
 		//		 component sub loggers (see Logger#sub)
@@ -67,65 +69,64 @@ public class Patchwork {
 		LOGGER.setWriter(new StreamWriter(true, System.out, System.err), LogLevel.TRACE);
 	}
 
-	public static void main(String[] args) throws Exception {
-		File current = new File(System.getProperty("user.dir"));
-		Path currentPath = current.toPath();
-		File voldemapTiny = new File(current, "data/mappings/voldemap-" + version + ".tiny");
-		List<TsrgClass<RawMapping>> classes = Tsrg.readMappings(new FileInputStream(new File(current, "data/mappings/voldemap-" + version + ".tsrg")));
+	public Patchwork(Path inputDir, Path outputDir, Path dataDir, Path tempDir, IMappingProvider primaryMappings, List<IMappingProvider> devMappings) {
+		this.inputDir = inputDir;
+		this.outputDir = outputDir;
+		this.dataDir = dataDir;
+		this.tempDir = tempDir;
+		this.primaryMappings = primaryMappings;
+		this.devMappings = devMappings;
 
-		IMappingProvider intermediary = TinyUtils.createTinyMappingProvider(currentPath.resolve("data/mappings/intermediary-" + version + ".tiny"), "official", "intermediary");
-		TsrgMappings mappings = new TsrgMappings(classes, intermediary);
-
-		if (!voldemapTiny.exists()) {
-			TinyWriter tinyWriter = new TinyWriter("official", "srg");
-			mappings.load(tinyWriter);
-			String tiny = tinyWriter.toString();
-			Files.write(voldemapTiny.toPath(), tiny.getBytes(StandardCharsets.UTF_8));
+		try {
+			this.patchworkGreyscaleIcon = Files.readAllBytes(Paths.get(Patchwork.class.getResource("/patchwork-icon-greyscale.png").toURI()));
+		} catch (IOException | URISyntaxException ex) {
+			LOGGER.thrown(LogLevel.FATAL, ex);
 		}
 
-		File voldemapBridged = new File(current, "data/mappings/voldemap-bridged-" + version + ".tiny");
-		IMappingProvider bridged;
-
-		if (!voldemapBridged.exists()) {
-			LOGGER.trace("Generating bridged (srg -> intermediary) tiny mappings");
-
-			TinyWriter tinyWriter = new TinyWriter("srg", "intermediary");
-			bridged = new BridgedMappings(mappings, intermediary);
-			bridged.load(tinyWriter);
-
-			Files.write(voldemapBridged.toPath(), tinyWriter.toString().getBytes(StandardCharsets.UTF_8));
-		} else {
-			LOGGER.trace("Using cached bridged (srg -> intermediary) tiny mappings");
-
-			bridged = TinyUtils.createTinyMappingProvider(voldemapBridged.toPath(), "srg", "intermediary");
-		}
-
-		NaiveRemapper naiveRemapper = new NaiveRemapper(bridged);
-		Files.createDirectories(currentPath.resolve("input"));
-		Files.createDirectories(currentPath.resolve("output"));
-		Stream<Path> inputWalk = Files.walk(currentPath.resolve("input"));
-		inputWalk.forEach(file -> {
-			if (!file.toString().endsWith(".jar")) {
-				return;
-			}
-
-			String modName = file.getFileName().toString().replaceAll(".jar", "");
-
-			LOGGER.info("=== Transforming " + modName + " ===");
-
-			try {
-				transformMod(currentPath, file, currentPath.resolve("output"), modName, bridged, naiveRemapper);
-			} catch (Exception e) {
-				LOGGER.error("Transformation failed, going on to next mod: ");
-
-				LOGGER.thrown(LogLevel.ERROR, e);
-			}
-		});
-		inputWalk.close();
+		this.naiveRemapper = new NaiveRemapper(primaryMappings);
+		this.manifestRemapper = new ManifestRemapper(primaryMappings);
 	}
 
-	public static void transformMod(Path currentPath, Path jarPath, Path outputRoot, String mod, IMappingProvider mappings, NaiveRemapper naiveRemapper)
-			throws IOException, URISyntaxException, ManifestParseException {
+	public int patchAndFinish() throws IOException {
+		if (this.closed) {
+			throw new IllegalStateException("Cannot begin patching: Already patched all mods!");
+		}
+
+		int count = 0;
+
+		try (Stream<Path> inputFilesStream = Files.walk(inputDir).filter(file -> file.toString().endsWith(".jar"))) {
+			List<Path> inputFiles = inputFilesStream.collect(Collectors.toList());
+
+			for (Path jarPath : inputFiles) {
+				try {
+					transformMod(jarPath);
+					count++;
+				} catch (Exception ex) {
+					LOGGER.thrown(LogLevel.ERROR, ex);
+				}
+			}
+
+			for (Path jarPath : inputFiles) {
+				int remapCount = 0;
+
+				for (IMappingProvider mappingProvider : devMappings) {
+					String mod = jarPath.getFileName().toString().split("\\.jar")[0];
+
+					try {
+						remap(mappingProvider, jarPath, outputDir.resolve(mod + "-dev-" + remapCount++ + ".jar"));
+					} catch (IOException ex) {
+						LOGGER.thrown(LogLevel.ERROR, ex);
+					}
+				}
+			}
+		}
+
+		finish();
+		return count;
+	}
+
+	private void transformMod(Path jarPath) throws IOException, URISyntaxException, ManifestParseException {
+		String mod = jarPath.getFileName().toString().split("\\.jar")[0];
 		// Load metadata
 		LOGGER.trace("Loading and parsing metadata");
 		URI inputJar = new URI("jar:" + jarPath.toUri().toString());
@@ -152,12 +153,10 @@ public class Patchwork {
 
 		LOGGER.trace("Remapping access transformers");
 
-		try (ManifestRemapper manifestRemapper = new ManifestRemapper(mappings)) {
-			list.remap(manifestRemapper);
-		}
+		list.remap(manifestRemapper);
 
 		LOGGER.info("Remapping and patching %s (TinyRemapper, srg -> intermediary)", mod);
-		Path output = outputRoot.resolve(mod + ".jar");
+		Path output = outputDir.resolve(mod + ".jar");
 		// Delete old patched jar
 		Files.deleteIfExists(output);
 		TinyRemapper remapper = null;
@@ -167,7 +166,7 @@ public class Patchwork {
 		JsonArray patchworkEntrypoints = new JsonArray();
 
 		try {
-			remapper = remap(mappings, jarPath, transformer, currentPath.resolve("data/" + version + "-client+srg.jar"));
+			remapper = remap(primaryMappings, jarPath, transformer, dataDir.resolve(version + "-client+srg.jar"));
 
 			// Write the ForgeInitializer
 			transformer.finish(patchworkEntrypoints::add);
@@ -222,7 +221,7 @@ public class Patchwork {
 		LOGGER.trace("fabric.mod.json: " + json);
 
 		// Write patchwork logo
-		Patchwork.writeLogo(primary, fs);
+		this.writeLogo(primary, fs);
 
 		try {
 			Files.createDirectory(fs.getPath("/META-INF/jars/"));
@@ -245,7 +244,7 @@ public class Patchwork {
 			FileSystem subFs = FileSystems.newFileSystem(new URI("jar:" + subJarPath.toUri().toString()), env);
 
 			// Write patchwork logo
-			Patchwork.writeLogo(entry, subFs);
+			this.writeLogo(entry, subFs);
 
 			// Write the fabric.mod.json
 			Path modJsonPath = subFs.getPath("/fabric.mod.json");
@@ -267,6 +266,11 @@ public class Patchwork {
 		// https://github.com/CottonMC/Cotton/blob/master/modules/cotton-datapack/src/main/java/io/github/cottonmc/cotton/datapack/mixins/MixinCottonInitializerServer.java
 	}
 
+	private void finish() {
+		this.manifestRemapper.close();
+		this.closed = true;
+	}
+
 	public static void remap(IMappingProvider mappings, Path input, Path output, Path... classpath)
 		throws IOException {
 		OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(output).build();
@@ -284,7 +288,7 @@ public class Patchwork {
 		}
 	}
 
-	public static TinyRemapper remap(IMappingProvider mappings, Path input, BiConsumer<String, byte[]> consumer, Path... classpath) {
+	private static TinyRemapper remap(IMappingProvider mappings, Path input, BiConsumer<String, byte[]> consumer, Path... classpath) {
 		TinyRemapper remapper = TinyRemapper.newRemapper().withMappings(mappings).rebuildSourceFilenames(true).build();
 
 		remapper.readClassPath(classpath);
@@ -294,10 +298,49 @@ public class Patchwork {
 		return remapper;
 	}
 
-	private static void writeLogo(JsonObject json, FileSystem fs) throws IOException {
+	private void writeLogo(JsonObject json, FileSystem fs) throws IOException {
 		if (json.getAsJsonPrimitive("icon").getAsString().equals("assets/patchwork-generated/icon.png")) {
 			Files.createDirectories(fs.getPath("assets/patchwork-generated/"));
 			Files.write(fs.getPath("assets/patchwork-generated/icon.png"), patchworkGreyscaleIcon);
 		}
+	}
+
+	public static void main(String[] args) throws Exception {
+		File current = new File(System.getProperty("user.dir"));
+		Path currentPath = current.toPath();
+		File voldemapTiny = new File(current, "data/mappings/voldemap-" + version + ".tiny");
+		List<TsrgClass<RawMapping>> classes = Tsrg.readMappings(new FileInputStream(new File(current, "data/mappings/voldemap-" + version + ".tsrg")));
+
+		IMappingProvider intermediary = TinyUtils.createTinyMappingProvider(currentPath.resolve("data/mappings/intermediary-" + version + ".tiny"), "official", "intermediary");
+		TsrgMappings mappings = new TsrgMappings(classes, intermediary);
+
+		if (!voldemapTiny.exists()) {
+			TinyWriter tinyWriter = new TinyWriter("official", "srg");
+			mappings.load(tinyWriter);
+			String tiny = tinyWriter.toString();
+			Files.write(voldemapTiny.toPath(), tiny.getBytes(StandardCharsets.UTF_8));
+		}
+
+		File voldemapBridged = new File(current, "data/mappings/voldemap-bridged-" + version + ".tiny");
+		IMappingProvider bridged;
+
+		if (!voldemapBridged.exists()) {
+			LOGGER.trace("Generating bridged (srg -> intermediary) tiny mappings");
+
+			TinyWriter tinyWriter = new TinyWriter("srg", "intermediary");
+			bridged = new BridgedMappings(mappings, intermediary);
+			bridged.load(tinyWriter);
+
+			Files.write(voldemapBridged.toPath(), tinyWriter.toString().getBytes(StandardCharsets.UTF_8));
+		} else {
+			LOGGER.trace("Using cached bridged (srg -> intermediary) tiny mappings");
+
+			bridged = TinyUtils.createTinyMappingProvider(voldemapBridged.toPath(), "srg", "intermediary");
+		}
+
+		Path inputDir = Files.createDirectories(currentPath.resolve("input"));
+		Path outputDir = Files.createDirectories(currentPath.resolve("output"));
+		Path tempDir = Files.createTempDirectory(currentPath, "temp");
+		new Patchwork(inputDir, outputDir, currentPath.resolve("data/"), tempDir, bridged, Collections.emptyList()).patchAndFinish();
 	}
 }
