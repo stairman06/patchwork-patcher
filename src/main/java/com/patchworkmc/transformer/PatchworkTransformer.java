@@ -2,6 +2,7 @@ package com.patchworkmc.transformer;
 
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ import com.patchworkmc.event.generator.StaticEventRegistrarGenerator;
 import com.patchworkmc.event.generator.SubscribeEventGenerator;
 import com.patchworkmc.event.initialization.RegisterAutomaticSubscribers;
 import com.patchworkmc.event.initialization.RegisterEventRegistrars;
+import com.patchworkmc.event.EventSubscriptionChecker;
 import com.patchworkmc.patch.StringConstantRemapper;
 import com.patchworkmc.logging.Logger;
 import com.patchworkmc.mapping.remapper.NaiveRemapper;
@@ -40,6 +42,7 @@ import com.patchworkmc.objectholder.ObjectHolderGenerator;
 import com.patchworkmc.objectholder.ObjectHolderScanner;
 import com.patchworkmc.objectholder.initialization.RegisterObjectHolders;
 import com.patchworkmc.patch.BlockSettingsTransformer;
+import com.patchworkmc.patch.ExtensibleEnumTransformer;
 import com.patchworkmc.patch.ItemGroupTransformer;
 import com.patchworkmc.transformer.initialization.ConstructTargetMod;
 
@@ -55,6 +58,8 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 	private Queue<Map.Entry<String, String>> instanceEventRegistrars = new ConcurrentLinkedQueue<>(); // shimName -> baseName
 	private Queue<Map.Entry<String, EventBusSubscriber>> eventBusSubscribers = new ConcurrentLinkedQueue<>(); // basename -> EventBusSubscriber
 	private Queue<Map.Entry<String, String>> modInfo = new ConcurrentLinkedQueue<>(); // modId -> clazz
+
+	private EventSubscriptionChecker checker = new EventSubscriptionChecker();
 
 	/**
 	 * The main class transformer for Patchwork.
@@ -127,8 +132,9 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 
 		ItemGroupTransformer itemGroupTransformer = new ItemGroupTransformer(eventHandlerScanner);
 		BlockSettingsTransformer blockSettingsTransformer = new BlockSettingsTransformer(itemGroupTransformer);
+		ExtensibleEnumTransformer extensibleEnumTransformer = new ExtensibleEnumTransformer(blockSettingsTransformer);
 
-		reader.accept(blockSettingsTransformer, ClassReader.EXPAND_FRAMES);
+		reader.accept(extensibleEnumTransformer, ClassReader.EXPAND_FRAMES);
 
 		ClassWriter writer = new ClassWriter(0);
 
@@ -195,6 +201,11 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 		}
 
 		outputConsumer.accept(name, writer.toByteArray());
+
+		List<String> supers = new ArrayList<>();
+		supers.add(reader.getSuperName());
+		supers.addAll(Arrays.asList(reader.getInterfaces()));
+		checker.onClassScanned(name, subscribeEvents, supers);
 	}
 
 	/**
@@ -232,6 +243,8 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 
 			generateInitializer(entry.getKey(), entry.getValue(), entrypoints);
 		});
+
+		checker.check();
 
 		return primaryId;
 	}
