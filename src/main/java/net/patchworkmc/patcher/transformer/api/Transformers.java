@@ -9,6 +9,7 @@ import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.tree.ClassNode;
 
+import net.patchworkmc.patcher.mapping.remapper.PatchworkRemapper;
 import net.patchworkmc.patcher.ForgeModJar;
 import net.patchworkmc.patcher.annotation.AnnotationProcessor;
 import net.patchworkmc.patcher.capabilityinject.CapabilityInjectRewriter;
@@ -16,24 +17,27 @@ import net.patchworkmc.patcher.event.EventHandlerRewriter;
 import net.patchworkmc.patcher.event.EventSubclassTransformer;
 import net.patchworkmc.patcher.event.EventSubscriptionChecker;
 import net.patchworkmc.patcher.objectholder.ObjectHolderRewriter;
+import net.patchworkmc.patcher.util.MinecraftVersion;
+import net.patchworkmc.patcher.util.VersionRange;
 import net.patchworkmc.patcher.patch.BiomeLayersTransformer;
 import net.patchworkmc.patcher.patch.BlockSettingsTransformer;
 import net.patchworkmc.patcher.patch.ExtensibleEnumTransformer;
 import net.patchworkmc.patcher.patch.ItemGroupTransformer;
 import net.patchworkmc.patcher.patch.KeyBindingsTransformer;
 import net.patchworkmc.patcher.patch.LevelGeneratorTypeTransformer;
+import net.patchworkmc.patcher.patch.StringConstantRemapper;
 import net.patchworkmc.patcher.patch.SuperclassRedirectionTransformer;
-import net.patchworkmc.patcher.util.MinecraftVersion;
-import net.patchworkmc.patcher.util.VersionRange;
 
 public final class Transformers {
 	private static final LinkedHashMap<TransformerConstructor, VersionRange> allTransformers = new LinkedHashMap<>();
 
-	public static byte[] apply(MinecraftVersion version, ForgeModJar jar, byte[] input, @Nullable EventSubscriptionChecker checker) {
+	public static byte[] apply(MinecraftVersion version, ForgeModJar jar, byte[] input, @Nullable EventSubscriptionChecker checker, PatchworkRemapper remapper) {
 		ClassReader reader = new ClassReader(input);
 		ClassNode node = new ClassNode();
 		ClassPostTransformer postTransformer = new ClassPostTransformer(checker);
 		ClassVisitor parent = node;
+
+		parent = new StringConstantRemapper(parent, remapper.getNaiveRemapper());
 
 		for (Map.Entry<TransformerConstructor, VersionRange> entry : allTransformers.entrySet()) {
 			if (entry.getValue().isCompatible(version)) {

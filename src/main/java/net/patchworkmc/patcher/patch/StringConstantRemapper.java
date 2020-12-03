@@ -41,6 +41,7 @@ public class StringConstantRemapper extends ClassVisitor {
 	private String remap(String name) {
 		// if unable to remap these methods return the names they received.
 		if (name.startsWith("field_")) {
+			System.out.println("Field name found: " + name);
 			name = remapper.getField(name);
 		} else if (name.startsWith("func_")) {
 			try {

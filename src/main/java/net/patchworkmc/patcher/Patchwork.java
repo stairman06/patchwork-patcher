@@ -339,7 +339,7 @@ public class Patchwork {
 				try {
 					Files.deleteIfExists(forgeModJar.getOutputPath());
 					Path jar = forgeModJar.getInputPath();
-					PatchworkTransformer transformer = new PatchworkTransformer(this.minecraftVersion, new OutputConsumerPath.Builder(forgeModJar.getOutputPath()).build(), forgeModJar);
+					PatchworkTransformer transformer = new PatchworkTransformer(this.minecraftVersion, new OutputConsumerPath.Builder(forgeModJar.getOutputPath()).build(), forgeModJar, this.patchworkRemapper);
 					outputConsumers.add(transformer);
 					remapper.apply(transformer, tagMap.get(forgeModJar));
 					transformer.finish();

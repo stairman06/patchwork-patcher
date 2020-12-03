@@ -8,6 +8,7 @@ import net.fabricmc.tinyremapper.OutputConsumerPath;
 
 import net.patchworkmc.patcher.ForgeModJar;
 import net.patchworkmc.patcher.event.EventSubscriptionChecker;
+import net.patchworkmc.patcher.mapping.remapper.PatchworkRemapper;
 import net.patchworkmc.patcher.transformer.api.Transformers;
 import net.patchworkmc.patcher.util.MinecraftVersion;
 
@@ -16,15 +17,17 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 	private final OutputConsumerPath outputConsumer;
 	private final ForgeModJar modJar;
 	private final EventSubscriptionChecker checker;
+	private final PatchworkRemapper remapper;
 
 	/**
 	 * The main class transformer for Patchwork.
 	**/
-	public PatchworkTransformer(MinecraftVersion minecraftVersion, OutputConsumerPath outputConsumer, ForgeModJar modJar) {
+	public PatchworkTransformer(MinecraftVersion minecraftVersion, OutputConsumerPath outputConsumer, ForgeModJar modJar, PatchworkRemapper remapper) {
 		this.minecraftVersion = minecraftVersion;
 		this.outputConsumer = outputConsumer;
 		this.modJar = modJar;
 		this.checker = new EventSubscriptionChecker();
+		this.remapper = remapper;
 	}
 
 	@Override
@@ -47,7 +50,7 @@ public class PatchworkTransformer implements BiConsumer<String, byte[]> {
 			throw new IllegalArgumentException("Mod jars are not allowed to contain classes in Java's package!");
 		}
 
-		outputConsumer.accept(name, Transformers.apply(minecraftVersion, modJar, content, checker));
+		outputConsumer.accept(name, Transformers.apply(minecraftVersion, modJar, content, checker, remapper));
 	}
 
 	public void finish() {
